@@ -36,7 +36,7 @@
 #include "crush/CrushTreeDumper.h"
 #include "common/Clock.h"
 #include "mon/PGMap.h"
-
+#include "OSD.h"
 using std::list;
 using std::make_pair;
 using std::map;

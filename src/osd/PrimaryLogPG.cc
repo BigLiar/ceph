@@ -2706,6 +2706,8 @@ PrimaryLogPG::cache_result_t PrimaryLogPG::maybe_handle_cache_detail(
   bool in_hit_set,
   ObjectContextRef *promote_obc)
 {
+
+  dout(5) << __func__ << "enter cache handle.cache_mode:" << pool.info.cache_mode << dendl; 
   // return quickly if caching is not enabled
   if (pool.info.cache_mode == pg_pool_t::CACHEMODE_NONE)
     return cache_result_t::NOOP;

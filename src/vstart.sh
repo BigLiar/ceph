@@ -704,6 +704,7 @@ $DAEMONOPTS
 $extra_conf
 [osd]
 $DAEMONOPTS
+	debug osd = 10/10
         osd_check_max_object_name_len_on_startup = false
         osd data = $CEPH_DEV_DIR/osd\$id
         osd journal = $CEPH_DEV_DIR/osd\$id/journal
@@ -730,6 +731,7 @@ $BLUESTORE_OPTS
 $COSDSHORT
 $extra_conf
 [mon]
+	debug mon=5/5
         mgr initial modules = $mgr_modules
 $DAEMONOPTS
 $CMONDEBUG

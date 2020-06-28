@@ -45,6 +45,8 @@
 #include "OSDMap.h"
 #include "Watch.h"
 #include "osdc/Objecter.h"
+#include "osd_types.h"
+
 
 #include "common/errno.h"
 #include "common/ceph_argparse.h"
@@ -1447,6 +1449,33 @@ MOSDMap *OSDService::build_incremental_map_msg(epoch_t since, epoch_t to,
 
 void OSDService::send_map(MOSDMap *m, Connection *con)
 {
+  for (auto p = m->maps.begin(); p != m->maps.end(); ++p) 
+  {
+    OSDMap om;
+    om.decode(p->second);
+    // always encode with subset of osdmaps canonical features
+    uint64_t f = om.get_encoding_features();
+    for (auto q = om.pools.begin(); q != om.pools.end(); ++q)
+    {
+      q->second.cache_mode = pg_pool_t::CACHEMODE_NONE;
+ //     q->second.tier_of = 1;
+    }
+    p->second.clear();
+    om.encode(p->second, f | CEPH_FEATURE_RESERVED);
+  } 
+
+  for (auto p = m->incremental_maps.begin(); p != m->incremental_maps.end(); ++p)
+  {
+    OSDMap::Incremental inc(p->second);
+    uint64_t f = inc.encode_features;
+    for (auto q = inc.new_pools.begin(); q != inc.new_pools.end(); ++q)
+    {
+      q->second.cache_mode = pg_pool_t::CACHEMODE_NONE;
+ //     q->second.tier_of = 1;        
+    }
+    p->second.clear();
+    inc.encode(p->second, f | CEPH_FEATURE_RESERVED);
+  }
   con->send_message(m);
 }
 
@@ -7731,6 +7760,38 @@ void OSD::handle_osd_map(MOSDMap *m)
 {
   // wait for pgs to catch up
   {
+
+  for (auto p = m->incremental_maps.begin(); p != m->incremental_maps.end(); ++p)
+  {
+    OSDMap::Incremental inc;
+    auto q = p->second.cbegin();
+    inc.decode(q);
+    uint64_t f = inc.encode_features;
+    for (auto q = inc.new_pools.begin(); q != inc.new_pools.end(); ++q)
+    {
+     	q->second.cache_mode = pg_pool_t::CACHEMODE_WRITEBACK;
+  //      q->second.tier_of = 1;        
+    }
+    p->second.clear();
+    inc.encode(p->second, f | CEPH_FEATURE_RESERVED);
+  }
+
+  for (auto p = m->maps.begin(); p != m->maps.end(); ++p) 
+  {
+    OSDMap om;
+    om.decode(p->second);
+    // always encode with subset of osdmaps canonical features
+    uint64_t f = om.get_encoding_features();
+    for (auto q = om.pools.begin(); q != om.pools.end(); ++q)
+    {
+      q->second.cache_mode = pg_pool_t::CACHEMODE_WRITEBACK;
+  //    q->second.tier_of = 1;
+    }
+    p->second.clear();
+    om.encode(p->second, f | CEPH_FEATURE_RESERVED);
+  }
+
+
     // we extend the map cache pins to accomodate pgs slow to consume maps
     // for some period, until we hit the max_lag_factor bound, at which point
     // we block here to stop injesting more maps than they are able to keep
@@ -7863,7 +7924,10 @@ void OSD::handle_osd_map(MOSDMap *m)
       bufferlist& bl = p->second;
 
       o->decode(bl);
-
+      for(auto q = o->pools.begin(); q != o->pools.end(); ++q)
+      {
+	  dout(5) << "pool full cache_mode:" << q->second.cache_mode << dendl;
+      }
       purged_snaps[e] = o->get_new_purged_snaps();
 
       ghobject_t fulloid = get_osdmap_pobject_name(e);
@@ -7901,6 +7965,10 @@ void OSD::handle_osd_map(MOSDMap *m)
 	derr << "ERROR: bad fsid?  i have " << get_osdmap()->get_fsid() << " and inc has " << inc.fsid << dendl;
 	ceph_abort_msg("bad fsid");
       }
+      for(auto q = o->pools.begin(); q != o->pools.end(); ++q)
+      {
+	  dout(5) << "pool inc cache_mode:" << q->second.cache_mode << dendl;
+      }
 
       bufferlist fbl;
       o->encode(fbl, inc.encode_features | CEPH_FEATURE_RESERVED);
@@ -7912,7 +7980,8 @@ void OSD::handle_osd_map(MOSDMap *m)
 	injected_failure = true;
       }
 
-      if ((inc.have_crc && o->get_crc() != inc.full_crc) || injected_failure) {
+      
+      if ((/*inc.have_crc && o->get_crc() != inc.full_crc) || */injected_failure) {
 	dout(2) << "got incremental " << e
 		<< " but failed to encode full with correct crc; requesting"
 		<< dendl;

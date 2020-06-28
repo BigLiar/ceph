@@ -43,7 +43,8 @@
 // forward declaration
 class CrushWrapper;
 class health_check_map_t;
-
+class OSD;
+class OSDService;
 /*
  * we track up to two intervals during which the osd was alive and
  * healthy.  the most recent is [up_from,up_thru), where up_thru is
@@ -350,7 +351,8 @@ WRITE_CLASS_ENCODER(PGTempMap)
 class OSDMap {
 public:
   MEMPOOL_CLASS_HELPERS();
-
+  friend class OSD;
+  friend class OSDService;
   class Incremental {
   public:
     MEMPOOL_CLASS_HELPERS();
