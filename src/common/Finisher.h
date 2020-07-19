@@ -37,6 +37,7 @@ enum {
  * contexts to complete is thread-safe.
  */
 class Finisher {
+  friend class Cache_IO_Finisher;
   CephContext *cct;
   ceph::mutex finisher_lock; ///< Protects access to queues and finisher_running.
   ceph::condition_variable finisher_cond; ///< Signaled when there is something to process.
@@ -55,7 +56,7 @@ class Finisher {
   /// Only active for named finishers.
   PerfCounters *logger;
 
-  void *finisher_thread_entry();
+  virtual void *finisher_thread_entry();
 
   struct FinisherThread : public Thread {
     Finisher *fin;
@@ -133,17 +134,18 @@ class Finisher {
   /** @brief Blocks until the finisher has nothing left to process.
    * This function will also return when a concurrent call to stop()
    * finishes, but this class should never be used in this way. */
-  void wait_for_empty();
+  virtual void wait_for_empty();
 
   /// Construct an anonymous Finisher.
   /// Anonymous finishers do not log their queue length.
+
   explicit Finisher(CephContext *cct_) :
     cct(cct_), finisher_lock(ceph::make_mutex("Finisher::finisher_lock")),
     finisher_stop(false), finisher_running(false), finisher_empty_wait(false),
     thread_name("fn_anonymous"), logger(0),
     finisher_thread(this) {}
 
-  /// Construct a named Finisher that logs its queue length.
+  // /Construct a named Finisher that logs its queue length.
   Finisher(CephContext *cct_, std::string name, std::string tn) :
     cct(cct_), finisher_lock(ceph::make_mutex("Finisher::" + name)),
     finisher_stop(false), finisher_running(false), finisher_empty_wait(false),
@@ -159,13 +161,43 @@ class Finisher {
     logger->set(l_finisher_complete_lat, 0);
   }
 
-  ~Finisher() {
+  virtual ~Finisher() {
     if (logger && cct) {
       cct->get_perfcounters_collection()->remove(logger);
       delete logger;
     }
   }
 };
+
+class ObjectOperation;
+class object_t;
+/// cache_IO_finisher 是Finisher的子类，用于在rados的cache层中处理异步读写流程。
+class Cache_IO_Finisher:public Finisher{
+public:
+  std::vector<std::tuple<Context*, const object_t*, ObjectOperation*, int>> finisher_IO_queue;
+  std::vector<std::tuple<Context*, const object_t*, ObjectOperation*, int>> in_progress_IO_queue;
+  
+  void queue(Context *c, const object_t& oid, ObjectOperation* op,int rw_mode = 0) {
+      std::unique_lock ul(finisher_lock);
+      bool was_empty = finisher_IO_queue.empty();
+      finisher_IO_queue.push_back(std::make_tuple(c, &oid, op, rw_mode));
+      if (was_empty) {
+	      finisher_cond.notify_one();
+      }
+      if (logger)
+          logger->inc(l_finisher_queue_len);
+   }
+
+   void wait_for_empty() override;
+   void *finisher_thread_entry() override;
+    
+   explicit Cache_IO_Finisher(CephContext *cct_) :
+	Finisher(cct_) {}
+   Cache_IO_Finisher(CephContext *cct_, std::string name, std::string tn) :
+	Finisher(cct_, name, tn) {}
+};
+
+
 
 /// Context that is completed asynchronously on the supplied finisher.
 class C_OnFinisher : public Context {

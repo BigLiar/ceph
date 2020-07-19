@@ -283,8 +283,28 @@ OSDService::OSDService(OSD *osd) :
     auto fin = make_unique<Finisher>(osd->client_messenger->cct, str.str(), "finisher");
     objecter_finishers.push_back(std::move(fin));
   }
+
+
+/**********************************start-modify************************************/
+  m_cache_IO_finishers = m_objecter_finishers;
+  for (int i = 0; i < m_cache_IO_finishers; i++) {
+    ostringstream str;
+    str << "cache-IO-finishers-" << i;
+    dout(5) << __func__ << " cache-IO-finisher" << i << " create successfully!" << dendl; 
+    auto fin = make_unique<Cache_IO_Finisher>(osd->client_messenger->cct, str.str(), "cIOfinisher");
+    cache_IO_finishers.push_back(std::move(fin));
+  }
 }
 
+
+Cache_IO_Finisher* OSDService::get_cache_IO_finisher(int shard) {
+  dout(5) << "shard:" << shard << dendl;
+  dout(5) << "length:" << cache_IO_finishers.size() << dendl;
+  return cache_IO_finishers[shard].get();
+
+/**********************************finish-modify************************************/
+
+}
 #ifdef PG_DEBUG_REFS
 void OSDService::add_pgid(spg_t pgid, PG *pg){
   std::lock_guard l(pgid_lock);
@@ -496,16 +516,28 @@ void OSDService::shutdown()
     f->stop();
   }
 
+ /***********************start modify********************************/
+  for (auto& f : cache_IO_finishers) {
+    f->wait_for_empty();
+    f->stop();
+  }
+ /**********************finish modify********************************/
   publish_map(OSDMapRef());
   next_osdmap = OSDMapRef();
 }
 
 void OSDService::init()
 {
+  dout(5) << __func__ << "OSDService init ..." << dendl;
   reserver_finisher.start();
   for (auto& f : objecter_finishers) {
     f->start();
   }
+  /**********************start modify********************************/
+  for (auto& f : cache_IO_finishers) {
+    f->start();
+  }
+  /*********************finish modify********************************/
   objecter->set_client_incarnation(0);
 
   // deprioritize objecter in daemonperf output
@@ -7981,7 +8013,7 @@ void OSD::handle_osd_map(MOSDMap *m)
       }
 
       
-      if ((/*inc.have_crc && o->get_crc() != inc.full_crc) || */injected_failure) {
+      if (/*inc.have_crc && o->get_crc() != inc.full_crc) || */injected_failure) {
 	dout(2) << "got incremental " << e
 		<< " but failed to encode full with correct crc; requesting"
 		<< dendl;

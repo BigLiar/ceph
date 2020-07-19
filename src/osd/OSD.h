@@ -526,6 +526,12 @@ public:
   int m_objecter_finishers;
   std::vector<std::unique_ptr<Finisher>> objecter_finishers;
 
+  // --cache_IO_finishers，添加的Finisher类数组，用于在tiering cahce中执行IO读写操作
+  int m_cache_IO_finishers;
+  std::vector<std::unique_ptr<Cache_IO_Finisher>> cache_IO_finishers;
+  Cache_IO_Finisher* get_cache_IO_finisher(int shard); 
+
+
   // -- Watch --
   ceph::mutex watch_lock = ceph::make_mutex("OSDService::watch_lock");
   SafeTimer watch_timer;

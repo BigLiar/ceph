@@ -7,6 +7,8 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "finisher(" << this << ") "
 
+#include "include/object.h"
+#include "osdc/Objecter.h"
 void Finisher::start()
 {
   ldout(cct, 10) << __func__ << dendl;
@@ -94,3 +96,115 @@ void *Finisher::finisher_thread_entry()
   return 0;
 }
 
+
+void Cache_IO_Finisher::wait_for_empty()
+{
+  std::unique_lock ul(finisher_lock);
+  while (!finisher_IO_queue.empty() || finisher_running) {
+    ldout(cct, 10) << "wait_for_empty waiting" << dendl;
+    finisher_empty_wait = true;
+    finisher_empty_cond.wait(ul);
+  }
+  ldout(cct, 10) << "wait_for_empty empty" << dendl;
+  finisher_empty_wait = false;
+}
+
+void *Cache_IO_Finisher::finisher_thread_entry()
+{
+  std::unique_lock ul(finisher_lock);
+  ldout(cct, 10) << "finisher_IO_thread start" << dendl;
+  std::cout << "finisher_IO_thread start" << std::endl;
+  utime_t start;
+  uint64_t count = 0;
+  while (!finisher_stop) {
+    /// Every time we are woken up, we process the queue until it is empty.
+   ldout(cct, 10) << "finisher_IO_thread prepare to do..." << dendl; 
+    while (!finisher_IO_queue.empty()) {
+      // To reduce lock contention, we swap out the queue to process.
+      // This way other threads can submit new contexts to complete
+      // while we are working.
+      in_progress_IO_queue.swap(finisher_IO_queue);
+      finisher_running = true;
+      ul.unlock();
+      ldout(cct, 10) << "finisher_IO_thread doing " << in_progress_IO_queue << dendl;
+
+      if (logger) {
+	start = ceph_clock_now();
+	count = in_progress_IO_queue.size();
+      }
+
+      // Now actually process the contexts.
+      for (auto IOtuple : in_progress_IO_queue) {
+        const object_t *oid = std::get<1>(IOtuple);         // 获取对象ID
+        ObjectOperation* oop = std::get<2>(IOtuple);  // 获取具体操作
+        int rwmode = std::get<3>(IOtuple);           // 获取读写模式
+	ldout(cct, 10) << __func__ << "IO mode:" << rwmode << ", oid:" << oid->name << ".ObjectOperation addr: " << oop << "ops length:" << oop->ops.size() << dendl;
+	
+	if(rwmode == 2 ){
+	  ldout(cct, 10) << __func__ << "cursor:" << oop->cursor << dendl;
+          ceph_assert(oop->cursor);
+	  //	  oop->cop_data
+	  oop->cursor->attr_complete = true;
+	  oop->cursor->data_complete = true;
+          oop->cursor->omap_complete = true;
+	}
+	int i = 0;
+	auto r = oop->out_rval.begin();
+        for(auto p = oop->ops.begin(); p != oop->ops.end(); p++, r++){
+          ldout(cct, 10) << "1 ops.size:" << oop->ops.size() << dendl;
+	  OSDOp& osd_op = *p;
+
+          ldout(cct, 10) << "2 ops.size:" << oop->ops.size() << dendl;
+          ceph_osd_op& cop = osd_op.op;
+	  
+          ldout(cct, 10) << "result_addr:" << *r << dendl;
+	  // 设置返回值
+	  if(*r)
+	    **r = 0;
+	  if(i++ < 100){
+	    ldout(cct, 10) << i << ":IO length:" << cop.extent.length << dendl;
+	    ldout(cct, 10) << i << ":IO offset:" << cop.extent.offset << dendl;
+	    ldout(cct, 10) << i << ":IO truncate_size:" << cop.extent.truncate_size << dendl;
+	    ldout(cct, 10) << i << ":IO truncate_seq:" << cop.extent.truncate_seq << dendl;
+	  }
+
+	  ldout(cct, 10) << "finish one IO!" << dendl;
+	}
+	
+	ldout(cct, 10) << "finish one OPS!" << dendl;
+	auto callback = std::get<0>(IOtuple);
+	
+	ldout(cct, 10) << "callback:" << callback << dendl;
+	delete oop;	
+	if(callback){
+          callback->complete(0);
+	}
+      }
+      ldout(cct, 10) << "finisher_IO_thread done with " << in_progress_IO_queue
+                     << dendl;
+      in_progress_IO_queue.clear();
+      if (logger) {
+	logger->dec(l_finisher_queue_len, count);
+	logger->tinc(l_finisher_complete_lat, ceph_clock_now() - start);
+      }
+
+      ul.lock();
+      finisher_running = false;
+    }
+    ldout(cct, 10) << "finisher_IO_thread empty" << dendl;
+    if (unlikely(finisher_empty_wait))
+      finisher_empty_cond.notify_all();
+    if (finisher_stop)
+      break;
+    
+    ldout(cct, 10) << "finisher_IO_thread sleeping" << dendl;
+    finisher_cond.wait(ul);
+  }
+  // If we are exiting, we signal the thread waiting in stop(),
+  // otherwise it would never unblock
+  finisher_empty_cond.notify_all();
+
+  ldout(cct, 10) << "finisher_IO_thread stop" << dendl;
+  finisher_stop = false;
+  return 0;
+}

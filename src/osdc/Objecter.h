@@ -65,12 +65,15 @@ struct ObjectOperation {
   std::vector<OSDOp> ops;
   int flags;
   int priority;
-
+  
+  object_copy_cursor_t* cursor;
+  bufferlist* cop_data;
+  
   std::vector<ceph::buffer::list*> out_bl;
   std::vector<Context*> out_handler;
   std::vector<int*> out_rval;
 
-  ObjectOperation() : flags(0), priority(0) {}
+  ObjectOperation() : flags(0), priority(0), cursor(NULL) {}
   ~ObjectOperation() {
     while (!out_handler.empty()) {
       delete out_handler.back();
@@ -849,6 +852,37 @@ struct ObjectOperation {
     out_handler[p] = h;
   }
 
+  /******************start modified***********************************/
+  void copy_get2(object_copy_cursor_t *cursor,
+		uint64_t max,
+		uint64_t *out_size,
+		ceph::real_time *out_mtime,
+		std::map<std::string,ceph::buffer::list> *out_attrs,
+		ceph::buffer::list *out_data,
+		ceph::buffer::list *out_omap_header,
+		ceph::buffer::list *out_omap_data,
+		std::vector<snapid_t> *out_snaps,
+		snapid_t *out_snap_seq,
+		uint32_t *out_flags,
+		uint32_t *out_data_digest,
+		uint32_t *out_omap_digest,
+		mempool::osd_pglog::vector<std::pair<osd_reqid_t, version_t> > *out_reqids,
+		mempool::osd_pglog::map<uint32_t, int> *out_reqid_return_codes,
+		uint64_t *truncate_seq,
+		uint64_t *truncate_size,
+		int *prval) {
+    using ceph::encode;
+    cursor = cursor;
+    cop_data = out_data;
+    OSDOp& osd_op = add_op(CEPH_OSD_OP_COPY_GET);
+    osd_op.op.copy_get.max = max;
+    unsigned p = ops.size() - 1;
+    out_rval[p] = prval;
+   
+    out_bl[p] = &osd_op.outdata;
+  }
+
+  /******************finish modified***********************************/
   void undirty() {
     add_op(CEPH_OSD_OP_UNDIRTY);
   }
@@ -1248,6 +1282,7 @@ public:
   void handle_conf_change(const ConfigProxy& conf,
                           const std::set <std::string> &changed) override;
 
+  ceph_tid_t get_tid(){return ++last_tid;}
 public:
   Messenger *messenger;
   MonClient *monc;

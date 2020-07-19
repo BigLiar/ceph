@@ -3077,13 +3077,13 @@ void PrimaryLogPG::do_proxy_read(OpRequestRef op, ObjectContextRef obc)
 
   ProxyReadOpRef prdop(std::make_shared<ProxyReadOp>(op, soid, m->ops));
 
-  ObjectOperation obj_op;
-  obj_op.dup(prdop->ops);
+  ObjectOperation* obj_op = new ObjectOperation();
+  obj_op->dup(prdop->ops);
 
   if (pool.info.cache_mode == pg_pool_t::CACHEMODE_WRITEBACK &&
       (agent_state && agent_state->evict_mode != TierAgentState::EVICT_MODE_FULL)) {
-    for (unsigned i = 0; i < obj_op.ops.size(); i++) {
-      ceph_osd_op op = obj_op.ops[i].op;
+    for (unsigned i = 0; i < obj_op->ops.size(); i++) {
+      ceph_osd_op op = obj_op->ops[i].op;
       switch (op.op) {
 	case CEPH_OSD_OP_READ:
 	case CEPH_OSD_OP_SYNC_READ:
@@ -3098,13 +3098,22 @@ void PrimaryLogPG::do_proxy_read(OpRequestRef op, ObjectContextRef obc)
 
   C_ProxyRead *fin = new C_ProxyRead(this, soid, get_last_peering_reset(),
 				     prdop);
-  ceph_tid_t tid = osd->objecter->read(
+  /************************update-start******************************/
+    C_OnFinisher *cfin = new C_OnFinisher(fin, osd->get_objecter_finisher(get_pg_shard()));
+    ceph_tid_t tid = osd->objecter->get_tid(); //获得当前OP的tid
+    osd->get_cache_IO_finisher(get_pg_shard())->queue(cfin, soid.oid, obj_op, 0);
+
+  
+  /*ceph_tid_t tid = osd->objecter->read(
     soid.oid, oloc, obj_op,
     m->get_snapid(), NULL,
     flags, new C_OnFinisher(fin, osd->get_objecter_finisher(get_pg_shard())),
     &prdop->user_version,
     &prdop->data_offset,
-    m->get_features());
+    m->get_features());*/
+  
+
+  /************************update-end*********************************/
   fin->tid = tid;
   prdop->objecter_tid = tid;
   proxyread_ops[tid] = prdop;
@@ -6453,6 +6462,8 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
 				    op.extent.offset, op.extent.length);
 	ctx->clean_regions.mark_data_region_dirty(op.extent.offset, op.extent.length);
+
+	dout(10) << "rewrite offset:" << op.extent.offset << ", rewrite length:" << op.extent.length << dendl;
 	dout(10) << "clean_regions modified" << ctx->clean_regions << dendl;
       }
       break;
@@ -8714,6 +8725,8 @@ struct C_Copyfrom : public Context {
       tid(0), cop(c)
   {}
   void finish(int r) override {
+    
+    std::cout << __func__ << "copy from finished. oid:" << oid.oid.name << std::endl;
     if (r == -ECANCELED)
       return;
     std::scoped_lock l{*pg};
@@ -9023,23 +9036,30 @@ void PrimaryLogPG::_copy_some(ObjectContextRef obc, CopyOpRef cop)
   if (cop->cursor.is_initial() && cop->mirror_snapset) {
     // list snaps too.
     ceph_assert(cop->src.snap == CEPH_NOSNAP);
-    ObjectOperation op;
-    op.list_snaps(&cop->results.snapset, NULL);
-    ceph_tid_t tid = osd->objecter->read(cop->src.oid, cop->oloc, op,
-				    CEPH_SNAPDIR, NULL,
-				    flags, gather.new_sub(), NULL);
+    ObjectOperation* op = new ObjectOperation();
+    op->list_snaps(&cop->results.snapset, NULL);
+    /***********************************update-start**********************************/
+
+    dout(10) << __func__ << " copy from start. oid:" << cop->src.oid.name << ". OPS length=" << op->ops.size() << dendl;
+    ceph_tid_t tid = osd->objecter->get_tid(); //获得当前OP的tid
+    osd->get_cache_IO_finisher(get_pg_shard())->queue(gather.new_sub(), cop->src.oid, op, 0);
+
+//   ceph_tid_t tid = osd->objecter->read(cop->src.oid, cop->oloc, op,
+//				    CEPH_SNAPDIR, NULL,
+//				    flags, gather.new_sub(), NULL);
+    /***********************************update-end************************************/
     cop->objecter_tid2 = tid;
   }
 
-  ObjectOperation op;
+  ObjectOperation* op = new ObjectOperation;
   if (cop->results.user_version) {
-    op.assert_version(cop->results.user_version);
+    op->assert_version(cop->results.user_version);
   } else {
     // we should learn the version after the first chunk, if we didn't know
     // it already!
     ceph_assert(cop->cursor.is_initial());
   }
-  op.copy_get(&cop->cursor, get_copy_chunk_size(),
+  op->copy_get2(&cop->cursor, get_copy_chunk_size(),
 	      &cop->results.object_size, &cop->results.mtime,
 	      &cop->attrs, &cop->data, &cop->omap_header, &cop->omap_data,
 	      &cop->results.snaps, &cop->results.snap_seq,
@@ -9051,19 +9071,31 @@ void PrimaryLogPG::_copy_some(ObjectContextRef obc, CopyOpRef cop)
 	      &cop->results.truncate_seq,
 	      &cop->results.truncate_size,
 	      &cop->rval);
-  op.set_last_op_flags(cop->src_obj_fadvise_flags);
+  op->set_last_op_flags(cop->src_obj_fadvise_flags);
 
   C_Copyfrom *fin = new C_Copyfrom(this, obc->obs.oi.soid,
 				   get_last_peering_reset(), cop);
   gather.set_finisher(new C_OnFinisher(fin,
 				       osd->get_objecter_finisher(get_pg_shard())));
+/************************update-start******************************************/
 
+    dout(5) << "copy from start. oid:" << cop->src.oid.name << ", cursor:" << op->cursor << ", cop.cursor:" << &cop->cursor <<  dendl;
+    op->cursor = &cop->cursor;
+    ceph_tid_t tid = osd->objecter->get_tid(); //获得当前OP的tid
+    
+    dout(10) << "ObjectOperation: " << op << ". OPS length=" << op->ops.size() << dendl;
+    osd->get_cache_IO_finisher(get_pg_shard())->queue(gather.new_sub(), cop->src.oid, op, 2);
+
+    /*
   ceph_tid_t tid = osd->objecter->read(cop->src.oid, cop->oloc, op,
 				  cop->src.snap, NULL,
 				  flags,
 				  gather.new_sub(),
 				  // discover the object version if we don't know it yet
 				  cop->results.user_version ? NULL : &cop->results.user_version);
+    */
+
+/***********************update-end************************************/
   fin->tid = tid;
   cop->objecter_tid = tid;
   gather.activate();
@@ -10152,13 +10184,13 @@ int PrimaryLogPG::start_flush(
   fop->on_flush = std::move(on_flush);
   fop->op = op;
 
-  ObjectOperation o;
+  ObjectOperation* o = new ObjectOperation();
   if (oi.is_whiteout()) {
     fop->removal = true;
-    o.remove();
+    o->remove();
   } else {
     object_locator_t oloc(soid);
-    o.copy_from(soid.oid.name, soid.snap, oloc, oi.user_version,
+    o->copy_from(soid.oid.name, soid.snap, oloc, oi.user_version,
 		CEPH_OSD_COPY_FROM_FLAG_FLUSH |
 		CEPH_OSD_COPY_FROM_FLAG_IGNORE_OVERLAY |
 		CEPH_OSD_COPY_FROM_FLAG_IGNORE_CACHE |
@@ -10167,16 +10199,25 @@ int PrimaryLogPG::start_flush(
 
     //mean the base tier don't cache data after this
     if (agent_state && agent_state->evict_mode != TierAgentState::EVICT_MODE_FULL)
-      o.set_last_op_flags(LIBRADOS_OP_FLAG_FADVISE_DONTNEED);
+      o->set_last_op_flags(LIBRADOS_OP_FLAG_FADVISE_DONTNEED);
   }
   C_Flush *fin = new C_Flush(this, soid, get_last_peering_reset());
 
-  ceph_tid_t tid = osd->objecter->mutate(
-    soid.oid, base_oloc, o, snapc,
-    ceph::real_clock::from_ceph_timespec(oi.mtime),
-    CEPH_OSD_FLAG_IGNORE_OVERLAY | CEPH_OSD_FLAG_ENFORCE_SNAPC,
-    new C_OnFinisher(fin,
-		     osd->get_objecter_finisher(get_pg_shard())));
+  /********************update-start************************/
+
+    C_OnFinisher *cfin = new C_OnFinisher(fin, osd->get_objecter_finisher(get_pg_shard()));
+    ceph_tid_t tid = osd->objecter->get_tid(); //获得当前OP的tid
+    osd->get_cache_IO_finisher(get_pg_shard())->queue(cfin, soid.oid, o, 0);
+
+
+//  ceph_tid_t tid = osd->objecter->mutate(
+//    soid.oid, base_oloc, o, snapc,
+//    ceph::real_clock::from_ceph_timespec(oi.mtime),
+//    CEPH_OSD_FLAG_IGNORE_OVERLAY | CEPH_OSD_FLAG_ENFORCE_SNAPC,
+//    new C_OnFinisher(fin,
+//		     osd->get_objecter_finisher(get_pg_shard())));
+
+  /********************update-end**************************/
   /* we're under the pg lock and fin->finish() is grabbing that */
   fin->tid = tid;
   fop->objecter_tid = tid;
@@ -10279,6 +10320,9 @@ int PrimaryLogPG::try_flush_mark_clean(FlushOpRef fop)
       requeue_ops(fop->dup_ops);
       return -EAGAIN;    // will retry
     } else {
+    
+      dout(10) << __func__ << " start to cancel flush." << dendl;
+
       osd->logger->inc(l_osd_tier_try_flush_fail);
       vector<ceph_tid_t> tids;
       cancel_flush(fop, false, &tids);

@@ -584,12 +584,12 @@ prepare_conf() {
         num ganesha = $GANESHA_DAEMON_NUM
 
 [global]
+        # debug finisher = 10/10
         fsid = $(uuidgen)
         osd failsafe full ratio = .99
         mon osd full ratio = .99
         mon osd nearfull ratio = .99
         mon osd backfillfull ratio = .99
-        mon_max_pg_per_osd = ${MON_MAX_PG_PER_OSD:-1000}
         erasure code dir = $EC_PATH
         plugin dir = $CEPH_LIB
         filestore fd cache size = 32
@@ -704,7 +704,6 @@ $DAEMONOPTS
 $extra_conf
 [osd]
 $DAEMONOPTS
-	debug osd = 10/10
         osd_check_max_object_name_len_on_startup = false
         osd data = $CEPH_DEV_DIR/osd\$id
         osd journal = $CEPH_DEV_DIR/osd\$id/journal
@@ -731,7 +730,6 @@ $BLUESTORE_OPTS
 $COSDSHORT
 $extra_conf
 [mon]
-	debug mon=5/5
         mgr initial modules = $mgr_modules
 $DAEMONOPTS
 $CMONDEBUG
@@ -914,7 +912,6 @@ start_mgr() {
     local ssl=${DASHBOARD_SSL:-1}
     # avoid monitors on nearby ports (which test/*.sh use extensively)
     MGR_PORT=$(($CEPH_PORT + 1000))
-    PROMETHEUS_PORT=9283
     for name in x y z a b c d e f g h i j k l m n o p
     do
         [ $mgr -eq $CEPH_NUM_MGR ] && break
@@ -946,8 +943,6 @@ EOF
                 fi
             fi
 	    MGR_PORT=$(($MGR_PORT + 1000))
-	    ceph_adm config set mgr mgr/prometheus/$name/server_port $PROMETHEUS_PORT --force
-	    PROMETHEUS_PORT=$(($PROMETHEUS_PORT + 1000))
 
 	    ceph_adm config set mgr mgr/restful/$name/server_port $MGR_PORT --force
             if [ $mgr -eq 1 ]; then
@@ -993,13 +988,11 @@ EOF
 
     if [ "$cephadm" -eq 1 ]; then
         debug echo Enabling cephadm orchestrator
-        ceph_adm config-key set mgr/cephadm/ssh_identity_key -i ~/.ssh/id_rsa
-        ceph_adm config-key set mgr/cephadm/ssh_identity_pub -i ~/.ssh/id_rsa.pub
+        ceph_adm config-key set mgr/ssh/ssh_identity_key -i ~/.ssh/id_rsa
+        ceph_adm config-key set mgr/ssh/ssh_identity_pub -i ~/.ssh/id_rsa.pub
         ceph_adm mgr module enable cephadm
         ceph_adm orch set backend cephadm
         ceph_adm orch host add $HOSTNAME
-        ceph_adm orch apply crash '*'
-        ceph_adm config set mgr mgr/cephadm/allow_ptrace true
     fi
 }
 
@@ -1159,15 +1152,7 @@ EOF
         # Wait few seconds for grace period to be removed
         sleep 2
         prun ganesha-rados-grace -p nfs-ganesha -n ganesha
-
-        if $with_mgr_dashboard; then
-            $CEPH_BIN/rados -p nfs-ganesha put "conf-$name" "$ganesha_dir/ganesha.conf"
-        fi
-    done
-
-    if $with_mgr_dashboard; then
-        ceph_adm dashboard set-ganesha-clusters-rados-pool-namespace nfs-ganesha
-    fi
+done
 }
 
 if [ "$debug" -eq 0 ]; then
@@ -1271,7 +1256,6 @@ mon_osd_reporter_subtree_level = osd
 mon_data_avail_warn = 2
 mon_data_avail_crit = 1
 mon_allow_pool_delete = true
-mon_allow_pool_size_one = true
 
 [osd]
 osd_scrub_load_threshold = 2000
