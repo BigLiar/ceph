@@ -8,6 +8,9 @@
 #define dout_prefix *_dout << "finisher(" << this << ") "
 
 #include "include/object.h"
+#include "include/buffer.h"
+#include "common/ceph_time.h"
+#include "osd/PrimaryLogPG.h"
 #include "osdc/Objecter.h"
 void Finisher::start()
 {
@@ -138,18 +141,11 @@ void *Cache_IO_Finisher::finisher_thread_entry()
         const object_t *oid = std::get<1>(IOtuple);         // 获取对象ID
         ObjectOperation* oop = std::get<2>(IOtuple);  // 获取具体操作
         int rwmode = std::get<3>(IOtuple);           // 获取读写模式
-	ldout(cct, 10) << __func__ << "IO mode:" << rwmode << ", oid:" << oid->name << ".ObjectOperation addr: " << oop << "ops length:" << oop->ops.size() << dendl;
+	ldout(cct, 10) << __func__ << ", oid:" << oid->name << ".ObjectOperation addr: " << oop << "ops length:" << oop->ops.size() << dendl;
 	
-	if(rwmode == 2 ){
-	  ldout(cct, 10) << __func__ << "cursor:" << oop->cursor << dendl;
-          ceph_assert(oop->cursor);
-	  //	  oop->cop_data
-	  oop->cursor->attr_complete = true;
-	  oop->cursor->data_complete = true;
-          oop->cursor->omap_complete = true;
-	}
 	int i = 0;
 	auto r = oop->out_rval.begin();
+	int result = 0;
         for(auto p = oop->ops.begin(); p != oop->ops.end(); p++, r++){
           ldout(cct, 10) << "1 ops.size:" << oop->ops.size() << dendl;
 	  OSDOp& osd_op = *p;
@@ -158,9 +154,42 @@ void *Cache_IO_Finisher::finisher_thread_entry()
           ceph_osd_op& cop = osd_op.op;
 	  
           ldout(cct, 10) << "result_addr:" << *r << dendl;
+
+
+	  if(cop.op == CEPH_OSD_OP_COPY_GET ){
+	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_COPY_GET" << dendl;
+	    bufferlist* bl = oop->cop_data;
+	    std::string filepath = "/root/ceph_data/" + oid->name;
+	    std::string error;
+	    result = bl->read_file(filepath.c_str(), &error);
+	    ldout(cct, 10) << "CEPH_OSD_OP_COPY_GET error:" << error << dendl; 
+	    ldout(cct, 10) << "bl.length: " << bl->length() << dendl;
+	    ceph_assert(oop->cursor);
+	    
+	    oop->cursor->data_offset = bl->length();
+	    oop->results->object_size = bl->length();
+	    oop->results->mtime = ceph::real_clock::now();
+	    oop->results->truncate_seq = cop.extent.truncate_seq;
+	    oop->results->truncate_size = cop.extent.truncate_size;
+
+	    oop->cursor->attr_complete = true;
+	    oop->cursor->data_complete = true;
+            oop->cursor->omap_complete = true;
+	  }
+	
+	  else if(cop.op == CEPH_OSD_OP_COPY_FROM){
+	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_COPY_FROM" << dendl;
+	    bufferlist& bl = osd_op.indata;
+	    std::string filepath = "/root/ceph_data/" + oid->name;
+	    result = bl.write_file(filepath.c_str(), 0755);
+	    bl.clear();
+	  }
+	  
 	  // 设置返回值
-	  if(*r)
-	    **r = 0;
+	  if(*r){
+	    **r = result;
+	    ldout(cct, 10) << "IO result:" << result << dendl;
+	  }
 	  if(i++ < 100){
 	    ldout(cct, 10) << i << ":IO length:" << cop.extent.length << dendl;
 	    ldout(cct, 10) << i << ":IO offset:" << cop.extent.offset << dendl;
@@ -173,11 +202,11 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 	
 	ldout(cct, 10) << "finish one OPS!" << dendl;
 	auto callback = std::get<0>(IOtuple);
-	
+
 	ldout(cct, 10) << "callback:" << callback << dendl;
 	delete oop;	
 	if(callback){
-          callback->complete(0);
+          callback->complete(result);
 	}
       }
       ldout(cct, 10) << "finisher_IO_thread done with " << in_progress_IO_queue

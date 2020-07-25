@@ -57,7 +57,7 @@ class MGetPoolStatsReply;
 class MStatfsReply;
 class MCommandReply;
 class MWatchNotify;
-
+struct CopyResults;
 
 // -----------------------------------------
 
@@ -65,10 +65,11 @@ struct ObjectOperation {
   std::vector<OSDOp> ops;
   int flags;
   int priority;
-  
+  /****************update************************/
   object_copy_cursor_t* cursor;
+  CopyResults* results;
   bufferlist* cop_data;
-  
+  /****************updata-stop********************/
   std::vector<ceph::buffer::list*> out_bl;
   std::vector<Context*> out_handler;
   std::vector<int*> out_rval;
@@ -853,34 +854,14 @@ struct ObjectOperation {
   }
 
   /******************start modified***********************************/
-  void copy_get2(object_copy_cursor_t *cursor,
+  void copy_get2(object_copy_cursor_t *cur,
 		uint64_t max,
-		uint64_t *out_size,
-		ceph::real_time *out_mtime,
+		CopyResults *r,
 		std::map<std::string,ceph::buffer::list> *out_attrs,
 		ceph::buffer::list *out_data,
 		ceph::buffer::list *out_omap_header,
 		ceph::buffer::list *out_omap_data,
-		std::vector<snapid_t> *out_snaps,
-		snapid_t *out_snap_seq,
-		uint32_t *out_flags,
-		uint32_t *out_data_digest,
-		uint32_t *out_omap_digest,
-		mempool::osd_pglog::vector<std::pair<osd_reqid_t, version_t> > *out_reqids,
-		mempool::osd_pglog::map<uint32_t, int> *out_reqid_return_codes,
-		uint64_t *truncate_seq,
-		uint64_t *truncate_size,
-		int *prval) {
-    using ceph::encode;
-    cursor = cursor;
-    cop_data = out_data;
-    OSDOp& osd_op = add_op(CEPH_OSD_OP_COPY_GET);
-    osd_op.op.copy_get.max = max;
-    unsigned p = ops.size() - 1;
-    out_rval[p] = prval;
-   
-    out_bl[p] = &osd_op.outdata;
-  }
+		int *prval);
 
   /******************finish modified***********************************/
   void undirty() {

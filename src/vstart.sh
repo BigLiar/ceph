@@ -584,7 +584,6 @@ prepare_conf() {
         num ganesha = $GANESHA_DAEMON_NUM
 
 [global]
-        # debug finisher = 10/10
         fsid = $(uuidgen)
         osd failsafe full ratio = .99
         mon osd full ratio = .99
@@ -704,7 +703,9 @@ $DAEMONOPTS
 $extra_conf
 [osd]
 $DAEMONOPTS
-        osd_check_max_object_name_len_on_startup = false
+        
+        debug finisher = 10/10
+	osd_check_max_object_name_len_on_startup = false
         osd data = $CEPH_DEV_DIR/osd\$id
         osd journal = $CEPH_DEV_DIR/osd\$id/journal
         osd journal size = 100

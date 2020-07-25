@@ -56,23 +56,6 @@ void put_with_id(PrimaryLogPG *pg, uint64_t id);
 #endif
 
 struct inconsistent_snapset_wrapper;
-
-class PrimaryLogPG : public PG, public PGBackend::Listener {
-  friend class OSD;
-  friend class Watch;
-
-public:
-  MEMPOOL_CLASS_HELPERS();
-
-  /*
-   * state associated with a copy operation
-   */
-  struct OpContext;
-  class CopyCallback;
-
-  /**
-   * CopyResults stores the object metadata of interest to a copy initiator.
-   */
   struct CopyResults {
     ceph::real_time mtime; ///< the copy source's mtime
     uint64_t object_size; ///< the copied object's size
@@ -118,6 +101,23 @@ public:
 	truncate_seq(0), truncate_size(0)
     {}
   };
+class PrimaryLogPG : public PG, public PGBackend::Listener {
+  friend class OSD;
+  friend class Watch;
+
+public:
+  MEMPOOL_CLASS_HELPERS();
+
+  /*
+   * state associated with a copy operation
+   */
+  struct OpContext;
+  class CopyCallback;
+
+  /**
+   * CopyResults stores the object metadata of interest to a copy initiator.
+   */
+
 
   struct CopyOp;
   typedef std::shared_ptr<CopyOp> CopyOpRef;

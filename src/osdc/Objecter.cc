@@ -17,6 +17,7 @@
 #include "Objecter.h"
 #include "osd/OSDMap.h"
 #include "Filer.h"
+#include "osd/PrimaryLogPG.h"
 
 #include "mon/MonClient.h"
 
@@ -164,6 +165,28 @@ enum {
   l_osdc_last,
 };
 
+/**************************updated*******************************/
+  void ObjectOperation::copy_get2(object_copy_cursor_t *cur,
+		uint64_t max,
+		CopyResults *r,
+		std::map<std::string,ceph::buffer::list> *out_attrs,
+		ceph::buffer::list *out_data,
+		ceph::buffer::list *out_omap_header,
+		ceph::buffer::list *out_omap_data,
+		int *prval) {
+    using ceph::encode;
+    cursor = cur;
+    cop_data = out_data;
+    results = r;
+    OSDOp& osd_op = add_op(CEPH_OSD_OP_COPY_GET);
+    osd_op.op.copy_get.max = max;
+    unsigned p = ops.size() - 1;
+    out_rval[p] = prval;
+   
+    out_bl[p] = &osd_op.outdata;
+  }
+
+/**************************updated-finish**************************/
 
 // config obs ----------------------------
 

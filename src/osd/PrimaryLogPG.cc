@@ -281,7 +281,7 @@ void PrimaryLogPG::OpContext::finish_read(PrimaryLogPG *pg)
 
 class CopyFromCallback : public PrimaryLogPG::CopyCallback {
 public:
-  PrimaryLogPG::CopyResults *results = nullptr;
+  CopyResults *results = nullptr;
   PrimaryLogPG::OpContext *ctx;
   OSDOp &osd_op;
   uint32_t truncate_seq;
@@ -3701,7 +3701,7 @@ public:
       start(ceph_clock_now()) {}
 
   void finish(PrimaryLogPG::CopyCallbackResults results) override {
-    PrimaryLogPG::CopyResults *results_data = results.get<1>();
+    CopyResults *results_data = results.get<1>();
     int r = results.get<0>();
     pg->finish_promote(r, results_data, obc);
     pg->osd->logger->tinc(l_osd_tier_promote_lat, ceph_clock_now() - start);
@@ -3721,7 +3721,7 @@ public:
       start(ceph_clock_now()), ctx(ctx) {}
 
   void finish(PrimaryLogPG::CopyCallbackResults results) override {
-    PrimaryLogPG::CopyResults *results_data = results.get<1>();
+    CopyResults *results_data = results.get<1>();
     int r = results.get<0>();
     if (ctx) {
       promote_results = results;
@@ -8138,6 +8138,8 @@ void PrimaryLogPG::make_writeable(OpContext *ctx)
 	   << "  snapc=" << snapc << dendl;
   
   bool was_dirty = ctx->obc->obs.oi.is_dirty();
+
+  dout(10) << "is exists:" << ctx->new_obs.exists << ", was dirty" << was_dirty << ", ctx->undirty" << ctx->undirty << dendl;
   if (ctx->new_obs.exists) {
     // we will mark the object dirty
     if (ctx->undirty && was_dirty) {
@@ -9060,16 +9062,8 @@ void PrimaryLogPG::_copy_some(ObjectContextRef obc, CopyOpRef cop)
     ceph_assert(cop->cursor.is_initial());
   }
   op->copy_get2(&cop->cursor, get_copy_chunk_size(),
-	      &cop->results.object_size, &cop->results.mtime,
+	      &cop->results,
 	      &cop->attrs, &cop->data, &cop->omap_header, &cop->omap_data,
-	      &cop->results.snaps, &cop->results.snap_seq,
-	      &cop->results.flags,
-	      &cop->results.source_data_digest,
-	      &cop->results.source_omap_digest,
-	      &cop->results.reqids,
-	      &cop->results.reqid_return_codes,
-	      &cop->results.truncate_seq,
-	      &cop->results.truncate_size,
 	      &cop->rval);
   op->set_last_op_flags(cop->src_obj_fadvise_flags);
 
@@ -9352,7 +9346,10 @@ void PrimaryLogPG::process_copy_chunk(hobject_t oid, ceph_tid_t tid, int r)
 	_write_copy_chunk(cop, t);
 	t->rename(obs.oi.soid, cop->results.temp_oid);
       }
-      t->setattrs(obs.oi.soid, cop->results.attrs);
+      if (cop->results.attrs.empty())
+        dout(10) << "attrs is empty" << dendl;
+      else
+        t->setattrs(obs.oi.soid, cop->results.attrs);
     });
 
   dout(20) << __func__ << " success; committing" << dendl;
@@ -9555,6 +9552,7 @@ void PrimaryLogPG::_write_copy_chunk(CopyOpRef cop, PGTransaction *t)
       }
     }
     if (cop->data.length()) {
+      dout(10) << __func__ << "oid:" << cop->results.temp_oid.oid.name << " offset:" << cop->temp_cursor.data_offset << " length:" << cop->data.length() << " flag:" << cop->dest_obj_fadvise_flags << dendl; 
       t->write(
 	cop->results.temp_oid,
 	cop->temp_cursor.data_offset,
@@ -10200,6 +10198,19 @@ int PrimaryLogPG::start_flush(
     //mean the base tier don't cache data after this
     if (agent_state && agent_state->evict_mode != TierAgentState::EVICT_MODE_FULL)
       o->set_last_op_flags(LIBRADOS_OP_FLAG_FADVISE_DONTNEED);
+
+
+    /********************update-start************************/
+    dout(10) << __func__ << " oi.size:" << oi.size << dendl;
+    bufferlist& bl = o->ops[0].indata;
+    auto flags = o->ops[0].op.flags;
+    int r = pgbackend->objects_read_sync(
+		    	  soid, 0, oi.size, flags, &bl);
+    if (r < 0){
+      delete o;
+      return r;
+    }
+    /********************update-end**************************/
   }
   C_Flush *fin = new C_Flush(this, soid, get_last_peering_reset());
 
