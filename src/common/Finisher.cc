@@ -163,7 +163,6 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 	    std::string error;
 	    result = bl->read_file(filepath.c_str(), &error);
 	    ldout(cct, 10) << "CEPH_OSD_OP_COPY_GET error:" << error << dendl; 
-	    ldout(cct, 10) << "bl.length: " << bl->length() << dendl;
 	    ceph_assert(oop->cursor);
 	    
 	    oop->cursor->data_offset = bl->length();
@@ -184,7 +183,42 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 	    result = bl.write_file(filepath.c_str(), 0755);
 	    bl.clear();
 	  }
-	  
+
+	  else if ((cop.op == CEPH_OSD_OP_READ) 
+			  | (cop.op == CEPH_OSD_OP_SYNC_READ) 
+			  | (cop.op == CEPH_OSD_OP_SPARSE_READ)
+			  | (cop.op == CEPH_OSD_OP_CHECKSUM) ){
+	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_READ" << dendl;
+	    bufferlist& bl = osd_op.outdata;
+	    auto length = cop.extent.length;
+	    auto offset = cop.extent.offset;
+	    std::string filepath = "/root/ceph_data/" + oid->name;
+	    std::string error;
+	    result = bl.pread_file(filepath.c_str(), offset, length, &error);
+	    ldout(cct, 10) << "CEPH_OSD_OP_READ error:" << error << dendl; 
+	  }
+
+	  else if (cop.op == CEPH_OSD_OP_WRITE){
+	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_WRITE" << dendl;
+	    bufferlist& bl = osd_op.indata;
+	    auto length = cop.extent.length;
+	    auto offset = cop.extent.offset;
+	    if (length != bl.length())
+		result = -EINVAL;
+	    else{
+	      std::string filepath = "/root/ceph_data/" + oid->name;
+	      int fd = ::open(filepath.c_str(), O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0755);
+	      result = bl.write_fd(fd, offset);
+	      ::close(fd);
+	      bl.clear();    
+	    }
+	  }
+	  else if(cop.op == CEPH_OSD_OP_DELETE){
+		ldout(cct, 10) << "OSDop:CEPH_OSD_OP_DELETE" << dendl;
+      		std::string filepath = "/root/ceph_data/" + oid->name;
+	    	result = ::unlink(filepath.c_str());
+	  }
+
 	  // 设置返回值
 	  if(*r){
 	    **r = result;

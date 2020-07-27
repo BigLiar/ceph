@@ -3077,7 +3077,8 @@ void PrimaryLogPG::do_proxy_read(OpRequestRef op, ObjectContextRef obc)
 
   ProxyReadOpRef prdop(std::make_shared<ProxyReadOp>(op, soid, m->ops));
 
-  ObjectOperation* obj_op = new ObjectOperation();
+/*updated*/  ObjectOperation* obj_op = new ObjectOperation();
+
   obj_op->dup(prdop->ops);
 
   if (pool.info.cache_mode == pg_pool_t::CACHEMODE_WRITEBACK &&
@@ -3101,7 +3102,7 @@ void PrimaryLogPG::do_proxy_read(OpRequestRef op, ObjectContextRef obc)
   /************************update-start******************************/
     C_OnFinisher *cfin = new C_OnFinisher(fin, osd->get_objecter_finisher(get_pg_shard()));
     ceph_tid_t tid = osd->objecter->get_tid(); //获得当前OP的tid
-    osd->get_cache_IO_finisher(get_pg_shard())->queue(cfin, soid.oid, obj_op, 0);
+    osd->get_cache_IO_finisher(get_pg_shard())->queue(cfin, m->get_hobj().oid, obj_op, 0);
 
   
   /*ceph_tid_t tid = osd->objecter->read(
@@ -3293,21 +3294,31 @@ void PrimaryLogPG::do_proxy_write(OpRequestRef op, ObjectContextRef obc)
   }
 
   dout(10) << __func__ << " Start proxy write for " << *m << dendl;
-
   ProxyWriteOpRef pwop(std::make_shared<ProxyWriteOp>(op, soid, m->ops, m->get_reqid()));
   pwop->ctx = new OpContext(op, m->get_reqid(), &pwop->ops, this);
   pwop->mtime = m->get_mtime();
 
-  ObjectOperation obj_op;
-  obj_op.dup(pwop->ops);
+  ObjectOperation* obj_op = new ObjectOperation();
+  obj_op->dup(pwop->ops);
 
   C_ProxyWrite_Commit *fin = new C_ProxyWrite_Commit(
       this, soid, get_last_peering_reset(), pwop);
-  ceph_tid_t tid = osd->objecter->mutate(
+  
+
+  /***************************start updating*************************/
+  C_OnFinisher *cfin = new C_OnFinisher(fin, osd->get_objecter_finisher(get_pg_shard()));
+  ceph_tid_t tid = osd->objecter->get_tid(); //获得当前OP的tid
+ 
+  dout(10) << __func__ << " oid: " << soid.oid.name << dendl;
+  osd->get_cache_IO_finisher(get_pg_shard())->queue(cfin, m->get_hobj().oid, obj_op, 0);
+
+  
+  /*ceph_tid_t tid = osd->objecter->mutate(
     soid.oid, oloc, obj_op, snapc,
     ceph::real_clock::from_ceph_timespec(pwop->mtime),
     flags, new C_OnFinisher(fin, osd->get_objecter_finisher(get_pg_shard())),
-    &pwop->user_version, pwop->reqid);
+    &pwop->user_version, pwop->reqid);*/
+  /**************************** finish updating*********************/
   fin->tid = tid;
   pwop->objecter_tid = tid;
   proxywrite_ops[tid] = pwop;
