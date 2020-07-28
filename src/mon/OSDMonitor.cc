@@ -5977,13 +5977,15 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
     typedef std::set<osd_pool_get_choices> choices_set_t;
 
     const choices_set_t ONLY_TIER_CHOICES = {
-      HIT_SET_TYPE, HIT_SET_PERIOD, HIT_SET_COUNT, HIT_SET_FPP,
-      TARGET_MAX_OBJECTS, TARGET_MAX_BYTES, CACHE_TARGET_FULL_RATIO,
-      CACHE_TARGET_DIRTY_RATIO, CACHE_TARGET_DIRTY_HIGH_RATIO,
-      CACHE_MIN_FLUSH_AGE, CACHE_MIN_EVICT_AGE,
-      MIN_READ_RECENCY_FOR_PROMOTE,
-      MIN_WRITE_RECENCY_FOR_PROMOTE,
-      HIT_SET_GRADE_DECAY_RATE, HIT_SET_SEARCH_LAST_N
+	    /************************updated
+	       HIT_SET_TYPE, HIT_SET_PERIOD, HIT_SET_COUNT, HIT_SET_FPP,
+	       TARGET_MAX_OBJECTS, TARGET_MAX_BYTES, CACHE_TARGET_FULL_RATIO,
+	       CACHE_TARGET_DIRTY_RATIO, CACHE_TARGET_DIRTY_HIGH_RATIO,
+	       CACHE_MIN_FLUSH_AGE, CACHE_MIN_EVICT_AGE,
+	       MIN_READ_RECENCY_FOR_PROMOTE,
+	       MIN_WRITE_RECENCY_FOR_PROMOTE,
+	       HIT_SET_GRADE_DECAY_RATE, HIT_SET_SEARCH_LAST_N
+	       */
     };
     const choices_set_t ONLY_ERASURE_CHOICES = {
       EC_OVERWRITES, ERASURE_CODE_PROFILE
@@ -7922,7 +7924,8 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
     f = strict_strtod(val.c_str(), &floaterr);
     uf = llrintl(f * (double)1000000.0);
   }
-
+	
+  /************************updated******************************
   if (!p.is_tier() &&
       (var == "hit_set_type" || var == "hit_set_period" ||
        var == "hit_set_count" || var == "hit_set_fpp" ||
@@ -7934,6 +7937,7 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
        var == "min_read_recency_for_promote" || var == "min_write_recency_for_promote")) {
     return -EACCES;
   }
+  */
 
   if (var == "size") {
     if (p.has_flag(pg_pool_t::FLAG_NOSIZECHANGE)) {

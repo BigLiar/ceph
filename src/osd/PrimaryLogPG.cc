@@ -8693,6 +8693,7 @@ void PrimaryLogPG::complete_read_ctx(int result, OpContext *ctx)
       break;
     }
     ctx->bytes_read += p->outdata.length();
+    dout(10) << __func__ << " outdata:" << p->outdata.c_str() << dendl;
   }
   ctx->reply->get_header().data_off = (ctx->data_off ? *ctx->data_off : 0);
 

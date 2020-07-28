@@ -12,6 +12,10 @@
 #include "common/ceph_time.h"
 #include "osd/PrimaryLogPG.h"
 #include "osdc/Objecter.h"
+#include <map>
+
+
+
 void Finisher::start()
 {
   ldout(cct, 10) << __func__ << dendl;
@@ -119,7 +123,12 @@ void *Cache_IO_Finisher::finisher_thread_entry()
   std::cout << "finisher_IO_thread start" << std::endl;
   utime_t start;
   uint64_t count = 0;
-  while (!finisher_stop) {
+
+  std::map<uint32_t, const char*> macro_map;
+  #define GET_OSD_OPS_NAME(op, opcode, str)    macro_map[opcode] = str;
+  __CEPH_FORALL_OSD_OPS(GET_OSD_OPS_NAME);
+
+while (!finisher_stop) {
     /// Every time we are woken up, we process the queue until it is empty.
    ldout(cct, 10) << "finisher_IO_thread prepare to do..." << dendl; 
     while (!finisher_IO_queue.empty()) {
@@ -145,19 +154,17 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 	
 	int i = 0;
 	auto r = oop->out_rval.begin();
+	auto out = oop->out_bl.begin();
 	int result = 0;
-        for(auto p = oop->ops.begin(); p != oop->ops.end(); p++, r++){
-          ldout(cct, 10) << "1 ops.size:" << oop->ops.size() << dendl;
+        for(auto p = oop->ops.begin(); p != oop->ops.end(); p++, r++, out++){
 	  OSDOp& osd_op = *p;
 
-          ldout(cct, 10) << "2 ops.size:" << oop->ops.size() << dendl;
           ceph_osd_op& cop = osd_op.op;
 	  
           ldout(cct, 10) << "result_addr:" << *r << dendl;
-
+	  ldout(cct, 10) << "OSDop:" << macro_map[cop.op] << dendl;
 
 	  if(cop.op == CEPH_OSD_OP_COPY_GET ){
-	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_COPY_GET" << dendl;
 	    bufferlist* bl = oop->cop_data;
 	    std::string filepath = "/root/ceph_data/" + oid->name;
 	    std::string error;
@@ -177,7 +184,6 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 	  }
 	
 	  else if(cop.op == CEPH_OSD_OP_COPY_FROM){
-	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_COPY_FROM" << dendl;
 	    bufferlist& bl = osd_op.indata;
 	    std::string filepath = "/root/ceph_data/" + oid->name;
 	    result = bl.write_file(filepath.c_str(), 0755);
@@ -188,18 +194,17 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 			  | (cop.op == CEPH_OSD_OP_SYNC_READ) 
 			  | (cop.op == CEPH_OSD_OP_SPARSE_READ)
 			  | (cop.op == CEPH_OSD_OP_CHECKSUM) ){
-	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_READ" << dendl;
-	    bufferlist& bl = osd_op.outdata;
+	    bufferlist& bl = **out;
 	    auto length = cop.extent.length;
 	    auto offset = cop.extent.offset;
 	    std::string filepath = "/root/ceph_data/" + oid->name;
 	    std::string error;
 	    result = bl.pread_file(filepath.c_str(), offset, length, &error);
-	    ldout(cct, 10) << "CEPH_OSD_OP_READ error:" << error << dendl; 
+	    ldout(cct, 10) << "CEPH_OSD_OP_READ buffer:" << bl.c_str() << " error:" << error << dendl; 
 	  }
 
-	  else if (cop.op == CEPH_OSD_OP_WRITE){
-	    ldout(cct, 10) << "OSDop:CEPH_OSD_OP_WRITE" << dendl;
+	  else if ((cop.op == CEPH_OSD_OP_WRITE) 
+			  | (cop.op == CEPH_OSD_OP_WRITEFULL)){
 	    bufferlist& bl = osd_op.indata;
 	    auto length = cop.extent.length;
 	    auto offset = cop.extent.offset;
@@ -207,14 +212,13 @@ void *Cache_IO_Finisher::finisher_thread_entry()
 		result = -EINVAL;
 	    else{
 	      std::string filepath = "/root/ceph_data/" + oid->name;
-	      int fd = ::open(filepath.c_str(), O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0755);
+	      int fd = ::open(filepath.c_str(), O_WRONLY|O_CREAT|O_CLOEXEC, 0755);
 	      result = bl.write_fd(fd, offset);
 	      ::close(fd);
 	      bl.clear();    
 	    }
 	  }
 	  else if(cop.op == CEPH_OSD_OP_DELETE){
-		ldout(cct, 10) << "OSDop:CEPH_OSD_OP_DELETE" << dendl;
       		std::string filepath = "/root/ceph_data/" + oid->name;
 	    	result = ::unlink(filepath.c_str());
 	  }

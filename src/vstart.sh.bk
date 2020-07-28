@@ -1387,18 +1387,17 @@ do_hitsets() {
         shift
         debug echo "setting hit_set on pool $pool type $type ..."
         ceph_adm <<EOF
-osd pool create $pool 32 
-osd pool set-quota $pool max_bytes $((512*1024*1024))
 osd pool set $pool hit_set_type $type
 osd pool set $pool hit_set_count 8
 osd pool set $pool hit_set_period 30
-osd pool set $pool min_read_recency_for_promote 1
-osd pool set $pool min_write_recency_for_promote  1
-osd pool set $pool target_max_bytes $((512*1024*1024))
+########## setting cache ratio##################
+# osd pool set $pool min_read_recency_for_promote 1
+# osd pool set $pool min_write_recency_for_promote  1
+
 
 osd pool set $pool cache_target_dirty_ratio .04
 osd pool set $pool cache_target_dirty_high_ratio .08
-osd pool set $pool cache_target_full_ratio .1
+osd pool set $pool cache_target_dirty_full_ratio .1
 EOF
     done
 }
