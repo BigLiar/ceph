@@ -14070,13 +14070,14 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
     }
 
     // be careful flushing omap to an EC pool.
+    /*
     if (!base_pool->supports_omap() &&
 	obc->obs.oi.is_omap()) {
       dout(20) << __func__ << " skip (omap to EC) " << obc->obs.oi << dendl;
       osd->logger->inc(l_osd_agent_skip);
       continue;
     }
-
+    */
     if (agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
 	agent_maybe_evict(obc, false))
       ++started;
