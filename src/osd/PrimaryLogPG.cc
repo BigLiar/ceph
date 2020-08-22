@@ -14003,10 +14003,10 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
   ceph_assert(is_active());
 
   agent_load_hit_sets();
-
+  /*
   const pg_pool_t *base_pool = get_osdmap()->get_pg_pool(pool.info.tier_of);
   ceph_assert(base_pool);
-
+  */
   int ls_min = 1;
   int ls_max = cct->_conf->osd_pool_default_cache_max_evict_check_size;
 
