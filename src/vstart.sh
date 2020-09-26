@@ -589,6 +589,7 @@ prepare_conf() {
         mon osd full ratio = .99
         mon osd nearfull ratio = .99
         mon osd backfillfull ratio = .99
+	debug osd = 10
         erasure code dir = $EC_PATH
         plugin dir = $CEPH_LIB
         filestore fd cache size = 32
@@ -928,21 +929,21 @@ start_mgr() {
         host = $HOSTNAME
 EOF
 
-            if $with_mgr_dashboard ; then
-                local port_option="ssl_server_port"
-                local http_proto="https"
-                if [ "$ssl" == "0" ]; then
-                    port_option="server_port"
-                    http_proto="http"
-                    ceph_adm config set mgr mgr/dashboard/ssl false --force
-                fi
-                ceph_adm config set mgr mgr/dashboard/$name/$port_option $MGR_PORT --force
-                if [ $mgr -eq 1 ]; then
-                    DASH_URLS="$http_proto://$IP:$MGR_PORT"
-                else
-                    DASH_URLS+=", $http_proto://$IP:$MGR_PORT"
-                fi
-            fi
+#            if $with_mgr_dashboard ; then
+#                local port_option="ssl_server_port"
+#                local http_proto="https"
+#                if [ "$ssl" == "0" ]; then
+#                    port_option="server_port"
+#                    http_proto="http"
+#                    ceph_adm config set mgr mgr/dashboard/ssl false --force
+#                fi
+#                ceph_adm config set mgr mgr/dashboard/$name/$port_option $MGR_PORT --force
+#                if [ $mgr -eq 1 ]; then
+#                    DASH_URLS="$http_proto://$IP:$MGR_PORT"
+#                else
+#                    DASH_URLS+=", $http_proto://$IP:$MGR_PORT"
+#                fi
+#            fi
 	    MGR_PORT=$(($MGR_PORT + 1000))
 
 	    ceph_adm config set mgr mgr/restful/$name/server_port $MGR_PORT --force
@@ -958,34 +959,34 @@ EOF
         run 'mgr' $name $CEPH_BIN/ceph-mgr -i $name $ARGS
     done
 
-    if [ "$new" -eq 1 ]; then
+#    if [ "$new" -eq 1 ]; then
         # setting login credentials for dashboard
-        if $with_mgr_dashboard; then
-            while ! ceph_adm -h | grep -c -q ^dashboard ; do
-                debug echo 'waiting for mgr dashboard module to start'
-                sleep 1
-            done
-            ceph_adm dashboard ac-user-create --force-password admin admin administrator
-            if [ "$ssl" != "0" ]; then
-                if ! ceph_adm dashboard create-self-signed-cert;  then
-                    debug echo dashboard module not working correctly!
-                fi
-            fi
-        fi
-
-        while ! ceph_adm -h | grep -c -q ^restful ; do
-            debug echo 'waiting for mgr restful module to start'
-            sleep 1
-        done
-        if ceph_adm restful create-self-signed-cert; then
-            SF=`mktemp`
-            ceph_adm restful create-key admin -o $SF
-            RESTFUL_SECRET=`cat $SF`
-            rm $SF
-        else
-            debug echo MGR Restful is not working, perhaps the package is not installed?
-        fi
-    fi
+#        if $with_mgr_dashboard; then
+#            while ! ceph_adm -h | grep -c -q ^dashboard ; do
+#                debug echo 'waiting for mgr dashboard module to start'
+#                sleep 1
+#            done
+#            ceph_adm dashboard ac-user-create --force-password admin admin administrator
+#            if [ "$ssl" != "0" ]; then
+#                if ! ceph_adm dashboard create-self-signed-cert;  then
+#                    debug echo dashboard module not working correctly!
+#                fi
+#            fi
+#        fi
+#
+#        while ! ceph_adm -h | grep -c -q ^restful ; do
+#            debug echo 'waiting for mgr restful module to start'
+#            sleep 1
+#        done
+#        if ceph_adm restful create-self-signed-cert; then
+#            SF=`mktemp`
+#            ceph_adm restful create-key admin -o $SF
+#            RESTFUL_SECRET=`cat $SF`
+#            rm $SF
+#        else
+#            debug echo MGR Restful is not working, perhaps the package is not installed?
+#        fi
+#    fi
 
     if [ "$cephadm" -eq 1 ]; then
         debug echo Enabling cephadm orchestrator

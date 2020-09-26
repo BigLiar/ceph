@@ -20,6 +20,7 @@
 #include "common/ceph_mutex.h"
 #include "common/Clock.h"
 #include "obj_bencher.h"
+#include <iostream>
 
 const std::string BENCH_LASTRUN_METADATA = "benchmark_last_metadata";
 const std::string BENCH_PREFIX = "benchmark_data";
@@ -255,7 +256,7 @@ int ObjBencher::aio_bench(
   const std::string run_name_meta = (run_name.empty() ? BENCH_LASTRUN_METADATA : run_name);
 
   //get data from previous write run, if available
-  if (operation != OP_WRITE || reuse_bench) {
+  if (operation != OP_FULL_WRITE || reuse_bench) {
     uint64_t prev_op_size, prev_object_size;
     r = fetch_bench_metadata(run_name_meta, &prev_op_size, &prev_object_size,
 			     &num_ops, &num_objects, &prev_pid);
@@ -268,14 +269,17 @@ int ObjBencher::aio_bench(
       }
       return r;
     }
-    object_size = prev_object_size;   
-    op_size = prev_op_size;           
+    object_size = prev_object_size;
+    if(op_size == 0)
+      op_size = prev_op_size;
   }
 
+  std::cout << "object_size:" << object_size << ", op_size:" << op_size << std::endl;
   char* contentsChars = new char[op_size];
   lock.lock();
   data.done = false;
-  data.hints = hints;
+  // data.hints = hints;
+  data.hints = 0;
   data.object_size = object_size;
   data.op_size = op_size;
   data.in_flight = 0;
@@ -293,8 +297,8 @@ int ObjBencher::aio_bench(
 
   if (formatter)
     formatter->open_object_section("bench");
-
-  if (OP_WRITE == operation) {
+  std::cout << "prev_pid:%d" << prev_pid << std::endl;
+  if (OP_FULL_WRITE == operation) {
     r = write_bench(secondsToRun, concurrentios, run_name_meta, max_objects, prev_pid);
     if (r != 0) goto out;
   }
@@ -306,8 +310,12 @@ int ObjBencher::aio_bench(
     r = rand_read_bench(secondsToRun, num_ops, num_objects, concurrentios, prev_pid, no_verify);
     if (r != 0) goto out;
   }
+  else if (OP_PART_WRITE == operation) {
+    r = part_write_bench(secondsToRun, num_ops, num_objects, concurrentios, prev_pid, true);
+    if (r != 0) goto out;
+  }
 
-  if (OP_WRITE == operation && cleanup) {
+  if (OP_FULL_WRITE == operation && cleanup) {
     r = fetch_bench_metadata(run_name_meta, &op_size, &object_size,
                             &num_ops, &num_objects, &prev_pid);
     if (r < 0) {
@@ -638,6 +646,224 @@ int ObjBencher::write_bench(int secondsToRun,
   return r;
 }
 
+int ObjBencher::part_write_bench(
+  int seconds_to_run, int num_ops, int num_objects,
+  int concurrentios, int pid, bool no_verify) {
+
+  lock_cond lc(&lock);
+
+  if (concurrentios <= 0)
+    return -EINVAL;
+
+  std::vector<string> name(concurrentios);
+  std::string newName;
+  unique_ptr<bufferlist> contents[concurrentios];
+  int index[concurrentios];
+  int errors = 0;
+  int r = 0;
+  double total_latency = 0;
+  std::vector<mono_time> start_times(concurrentios);
+  mono_clock::duration time_to_run = std::chrono::seconds(seconds_to_run);
+  std::chrono::duration<double> timePassed;
+  sanitize_object_contents(&data, data.op_size); //clean it up once; subsequent
+  //changes will be safe because string length should remain the same
+
+  unsigned writes_per_object = 1;
+  // if (data.op_size)
+  //   writes_per_object = data.object_size / data.op_size;
+
+  srand (time(NULL));
+
+  r = completions_init(concurrentios);
+  if (r < 0)
+    return r;
+
+
+  for (int i = 0; i<concurrentios; ++i) {
+    name[i] = generate_object_name_fast(i / writes_per_object, pid);
+    contents[i] = std::make_unique<bufferlist>();
+    snprintf(data.object_contents, data.op_size, "I'm the %16dth op!", i);
+    contents[i]->append(data.object_contents, data.op_size);
+  }
+
+
+  unique_lock locker{lock};
+  data.finished = 0;
+  data.start_time = mono_clock::now();
+  locker.unlock();
+
+  pthread_t print_thread;
+  pthread_create(&print_thread, NULL, status_printer, (void *)this);
+  ceph_pthread_setname(print_thread, "write_stat");
+
+  mono_time finish_time = data.start_time + time_to_run;
+  //start initial reads
+  for (int i = 0; i < concurrentios; ++i) {
+    index[i] = i;
+    start_times[i] = mono_clock::now();
+    create_completion(i, _aio_cb, (void *)&lc);
+    r = aio_write(name[i], i, *contents[i], data.op_size,
+     data.op_size * (i % writes_per_object));
+    // std::cout << "length:" << data.op_size << ", offset:" << data.op_size * (i % writes_per_object) << ", oid:" << name[i] << std::endl;
+    // std::cout << "buffer:" << *contents[i] << endl;
+    if (r < 0) {
+      cerr << "r = " << r << std::endl;
+      goto ERR;
+    }
+    locker.lock();
+    ++data.started;
+    ++data.in_flight;
+    locker.unlock();
+  }
+
+  //keep on adding new reads as old ones complete
+  int slot;
+  bufferlist *cur_contents;
+  int rand_id;
+
+  slot = 0;
+  while (data.finished < data.started) {
+    locker.lock();
+    int old_slot = slot;
+    bool found = false;
+    while (1) {
+      do {
+        if (completion_is_done(slot)) {
+          found = true;
+          break;
+        }
+        slot++;
+        if (slot == concurrentios) {
+          slot = 0;
+        }
+      } while (slot != old_slot);
+      if (found) {
+        break;
+      }
+      lc.cond.wait(locker);
+    }
+
+    // calculate latency here, so memcmp doesn't inflate it
+    data.cur_latency = mono_clock::now() - start_times[slot];
+
+    locker.unlock();
+
+    int current_index = index[slot];
+    cur_contents = contents[slot].get();
+    completion_wait(slot);
+    locker.lock();
+    r = completion_ret(slot);
+    if (r < 0) {
+      cerr << "slot:" << slot << ", write got " << r << std::endl;
+      locker.unlock();
+      goto ERR;
+    }
+
+    total_latency += data.cur_latency.count();
+    if (data.cur_latency.count() > data.max_latency)
+      data.max_latency = data.cur_latency.count();
+    if (data.cur_latency.count() < data.min_latency)
+      data.min_latency = data.cur_latency.count();
+    ++data.finished;
+    data.avg_latency = total_latency / data.finished;
+    --data.in_flight;
+
+    if (!no_verify) {
+      snprintf(data.object_contents, data.op_size, "I'm the %16dth op!", current_index);
+      if ((cur_contents->length() != data.op_size) ||
+          (memcmp(data.object_contents, cur_contents->c_str(), data.op_size) != 0)) {
+        cerr << name[slot] << " is not correct!" << std::endl;
+        ++errors;
+      }
+    }
+
+    locker.unlock();
+    release_completion(slot);
+
+    if (!seconds_to_run || mono_clock::now() >= finish_time)
+      continue;
+
+    //start new read and check data if requested
+
+    rand_id = rand() % num_ops;
+    newName = generate_object_name_fast(rand_id / writes_per_object, pid);
+    index[slot] = rand_id;
+
+    // invalidate internal crc cache
+    cur_contents->invalidate_crc();
+
+    start_times[slot] = mono_clock::now();
+    create_completion(slot, _aio_cb, (void *)&lc);
+    r = aio_write(newName, slot, *contents[slot], data.op_size,
+     data.op_size * (rand_id % writes_per_object));
+    if (r < 0) {
+      cerr << "r = " << r << std::endl;
+      goto ERR;
+    }
+    locker.lock();
+    ++data.started;
+    ++data.in_flight;
+    locker.unlock();
+    name[slot] = newName;
+  }
+
+  timePassed = mono_clock::now() - data.start_time;
+  locker.lock();
+  data.done = true;
+  locker.unlock();
+
+  pthread_join(print_thread, NULL);
+
+  double bandwidth;
+  bandwidth = ((double)data.finished)*((double)data.op_size)/timePassed.count();
+  bandwidth = bandwidth/(1024*1024); // we want it in MB/sec
+
+  double iops_stddev;
+  if (data.idata.iops_cycles > 1) {
+    iops_stddev = std::sqrt(data.idata.iops_diff_sum / (data.idata.iops_cycles - 1));
+  } else {
+    iops_stddev = 0;
+  }
+
+  if (!formatter) {
+    out(cout) << "Total time run:       " << timePassed.count() << std::endl
+       << "Total reads made:     " << data.finished << std::endl
+       << "Write size:            " << data.op_size << std::endl
+       << "Object size:          " << data.object_size << std::endl
+       << "Bandwidth (MB/sec):   " << setprecision(6) << bandwidth << std::endl
+       << "Average IOPS:         " << (int)(data.finished/timePassed.count()) << std::endl
+       << "Stddev IOPS:          " << iops_stddev << std::endl
+       << "Max IOPS:             " << data.idata.max_iops << std::endl
+       << "Min IOPS:             " << data.idata.min_iops << std::endl
+       << "Average Latency(s):   " << data.avg_latency << std::endl
+       << "Max latency(s):       " << data.max_latency << std::endl
+       << "Min latency(s):       " << data.min_latency << std::endl;
+  } else {
+    formatter->dump_format("total_time_run", "%f", timePassed.count());
+    formatter->dump_format("total_reads_made", "%d", data.finished);
+    formatter->dump_format("Write_size", "%d", data.op_size);
+    formatter->dump_format("object_size", "%d", data.object_size);
+    formatter->dump_format("bandwidth", "%f", bandwidth);
+    formatter->dump_format("average_iops", "%d", (int)(data.finished/timePassed.count()));
+    formatter->dump_format("stddev_iops", "%f", iops_stddev);
+    formatter->dump_format("max_iops", "%d", data.idata.max_iops);
+    formatter->dump_format("min_iops", "%d", data.idata.min_iops);
+    formatter->dump_format("average_latency", "%f", data.avg_latency);
+    formatter->dump_format("max_latency", "%f", data.max_latency);
+    formatter->dump_format("min_latency", "%f", data.min_latency);
+  }
+  completions_done();
+
+  return (errors > 0 ? -EIO : 0);
+
+ ERR:
+  locker.lock();
+  data.done = 1;
+  locker.unlock();
+  pthread_join(print_thread, NULL);
+  return r;
+}
+
 int ObjBencher::seq_read_bench(
   int seconds_to_run, int num_ops, int num_objects,
   int concurrentios, int pid, bool no_verify) {
@@ -871,8 +1097,8 @@ int ObjBencher::rand_read_bench(
   //changes will be safe because string length should remain the same
 
   unsigned reads_per_object = 1;
-  if (data.op_size)
-    reads_per_object = data.object_size / data.op_size;
+  // if (data.op_size)
+  //   reads_per_object = data.object_size / data.op_size;
 
   srand (time(NULL));
 

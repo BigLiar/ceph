@@ -13935,9 +13935,11 @@ void PrimaryLogPG::agent_setup()
   if (!is_active() ||
       !is_primary() ||
       state_test(PG_STATE_PREMERGE) ||
-      pool.info.cache_mode == pg_pool_t::CACHEMODE_NONE ||
-      pool.info.tier_of < 0 ||
-      !get_osdmap()->have_pg_pool(pool.info.tier_of)) {
+      pool.info.cache_mode == pg_pool_t::CACHEMODE_NONE 
+/*
+      || pool.info.tier_of < 0 ||
+      !get_osdmap()->have_pg_pool(pool.info.tier_of)
+*/) {
     agent_clear();
     return;
   }
@@ -14000,11 +14002,14 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
 
   agent_load_hit_sets();
 
+  /*
   const pg_pool_t *base_pool = get_osdmap()->get_pg_pool(pool.info.tier_of);
   ceph_assert(base_pool);
+  */
 
   int ls_min = 1;
   int ls_max = cct->_conf->osd_pool_default_cache_max_evict_check_size;
+
 
   // list some objects.  this conveniently lists clones (oldest to
   // newest) before heads... the same order we want to flush in.
@@ -14066,12 +14071,14 @@ bool PrimaryLogPG::agent_work(int start_max, int agent_flush_quota)
     }
 
     // be careful flushing omap to an EC pool.
-    if (!base_pool->supports_omap() &&
+   /* 
+   if (!base_pool->supports_omap() &&
 	obc->obs.oi.is_omap()) {
       dout(20) << __func__ << " skip (omap to EC) " << obc->obs.oi << dendl;
       osd->logger->inc(l_osd_agent_skip);
       continue;
     }
+    */
 
     if (agent_state->evict_mode != TierAgentState::EVICT_MODE_IDLE &&
 	agent_maybe_evict(obc, false))
@@ -14412,11 +14419,12 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
   uint64_t unflushable = info.stats.stats.sum.num_objects_hit_set_archive;
 
   // also exclude omap objects if ec backing pool
+  /*
   const pg_pool_t *base_pool = get_osdmap()->get_pg_pool(pool.info.tier_of);
   ceph_assert(base_pool);
   if (!base_pool->supports_omap())
     unflushable += info.stats.stats.sum.num_objects_omap;
-
+  */
   uint64_t num_user_objects = info.stats.stats.sum.num_objects;
   if (num_user_objects > unflushable)
     num_user_objects -= unflushable;
@@ -14431,13 +14439,14 @@ bool PrimaryLogPG::agent_choose_mode(bool restart, OpRequestRef op)
 
   // also reduce the num_dirty by num_objects_omap
   int64_t num_dirty = info.stats.stats.sum.num_objects_dirty;
+  /*
   if (!base_pool->supports_omap()) {
     if (num_dirty > info.stats.stats.sum.num_objects_omap)
       num_dirty -= info.stats.stats.sum.num_objects_omap;
     else
       num_dirty = 0;
   }
-
+  */
   dout(10) << __func__
 	   << " flush_mode: "
 	   << TierAgentState::get_flush_mode_name(agent_state->flush_mode)

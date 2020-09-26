@@ -587,10 +587,9 @@ void OSDService::agent_entry()
 {
   dout(10) << __func__ << " start" << dendl;
   std::unique_lock agent_locker{agent_lock};
-
   while (!agent_stop_flag) {
     if (agent_queue.empty()) {
-      dout(20) << __func__ << " empty queue" << dendl;
+      dout(20) << __func__ << " agent queue size:" << agent_queue.size() << dendl;
       agent_cond.wait(agent_locker);
       continue;
     }

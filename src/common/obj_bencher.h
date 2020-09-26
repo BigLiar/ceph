@@ -54,9 +54,10 @@ struct bench_data {
   char *object_contents; //pointer to the contents written to each object
 };
 
-const int OP_WRITE     = 1;
+const int OP_FULL_WRITE = 1;
 const int OP_SEQ_READ  = 2;
 const int OP_RAND_READ = 3;
+const int OP_PART_WRITE = 4;
 
 // Object is composed of <oid,namespace>
 typedef std::pair<std::string, std::string> Object;
@@ -80,6 +81,7 @@ protected:
   int write_bench(int secondsToRun, int concurrentios, const string& run_name_meta, unsigned max_objects, int prev_pid);
   int seq_read_bench(int secondsToRun, int num_ops, int num_objects, int concurrentios, int writePid, bool no_verify=false);
   int rand_read_bench(int secondsToRun, int num_ops, int num_objects, int concurrentios, int writePid, bool no_verify=false);
+  int part_write_bench(int secondsToRun, int num_ops, int num_objects, int concurrentios, int writePid, bool no_verify=false);
 
   int clean_up(int num_objects, int prevPid, int concurrentios);
   bool more_objects_matching_prefix(const std::string& prefix, std::list<Object>* name);

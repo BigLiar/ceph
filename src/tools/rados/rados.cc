@@ -1076,11 +1076,7 @@ protected:
 
     if (write_destination & OP_WRITE_DEST_OBJ) {
       if (data.hints)
-	op.set_alloc_hint2(data.object_size, data.op_size,
-			   ALLOC_HINT_FLAG_SEQUENTIAL_WRITE |
-			   ALLOC_HINT_FLAG_SEQUENTIAL_READ |
-			   ALLOC_HINT_FLAG_APPEND_ONLY |
-			   ALLOC_HINT_FLAG_IMMUTABLE);
+	     op.set_alloc_hint2(data.object_size, data.op_size, 0);
       op.write(offset, bl);
     }
 
@@ -1096,7 +1092,10 @@ protected:
       op.setxattr(key, bl);
     }
 
-    return io_ctx.aio_operate(oid, completions[slot], &op);
+    // return io_ctx.aio_operate(oid, completions[slot], &op);
+    // std::cout << "oid:" << oid << ", bl:" << bl << ", length:" << len << ", offset:" << offset << std::endl;
+    return io_ctx.aio_write(oid, completions[slot], bl, len, offset);
+
   }
 
   int aio_remove(const std::string& oid, int slot) override {
@@ -3156,21 +3155,24 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
     }
     int operation = 0;
     if (strcmp(nargs[2], "write") == 0)
-      operation = OP_WRITE;
+      operation = OP_FULL_WRITE;
     else if (strcmp(nargs[2], "seq") == 0)
       operation = OP_SEQ_READ;
     else if (strcmp(nargs[2], "rand") == 0)
       operation = OP_RAND_READ;
+    else if (strcmp(nargs[2], "partial") == 0)
+      operation = OP_PART_WRITE;
     else {
       usage(cerr);
       return 1;
     }
-    if (operation != OP_WRITE) {
-      if (block_size_specified) {
-        cerr << "-b|--block_size option can be used only with 'write' bench test"
-             << std::endl;
-        return 1;
-      }
+
+    if (operation != OP_FULL_WRITE) {
+      // if (block_size_specified) {
+      //   cerr << "-b|--block_size option can be used only with 'write' bench test"
+      //        << std::endl;
+      //   return 1;
+      // }
       if (bench_write_dest != 0) {
         cerr << "--write-object, --write-omap and --write-xattr options can "
                 "only be used with the 'write' bench test"
